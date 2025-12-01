@@ -1,0 +1,120 @@
+// server.js
+//
+// Simple MBZ backend:
+// - POST /webhook/mbz   ← TradingView / Pine alert webhook
+// - GET  /state/latest  ← front-end (index.html) polls this
+// - GET  /state/history ← optional, full history dump
+
+const express = require("express");
+const cors = require("cors");
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+let lastState = null;
+let history = [];
+const MAX_HISTORY = 200;
+
+// Helper: push into history
+function pushHistory(state) {
+  history.push(state);
+  if (history.length > MAX_HISTORY) {
+    history.splice(0, history.length - MAX_HISTORY);
+  }
+}
+
+// ========== WEBHOOK: Pine Script alert ==========
+app.post("/webhook/mbz", (req, res) => {
+  const payload = req.body || {};
+
+  const now = Date.now();
+
+  // You can shape this however you like in Pine alerts
+  const state = {
+    timestamp: payload.timestamp || now,
+
+    // Core MPD fields
+    mpdDirection: payload.mpdDirection || payload.direction || "UNKNOWN",
+    mpdSequence: payload.mpdSequence || payload.sequence || "",
+    mpdBias: payload.mpdBias || payload.bias || "",
+
+    // Strength score 0–1
+    mpdScore:
+      typeof payload.mpdScore === "number"
+        ? payload.mpdScore
+        : typeof payload.strength === "number"
+        ? payload.strength
+        : 0.5,
+
+    // Flow / mode
+    flowMode: payload.flowMode || "Ultra Instinct",
+    voidShield: !!payload.voidShield, // true/false
+
+    // MTF bias
+    bias4h: payload.bias4h || "Neutral",
+    bias1h: payload.bias1h || "Neutral",
+    bias30m: payload.bias30m || "Neutral",
+    bias15m: payload.bias15m || "Neutral",
+
+    // Stack score (optional)
+    stackScore:
+      typeof payload.stackScore === "number" ? payload.stackScore : undefined,
+
+    // Phase info
+    phaseTag: payload.phaseTag || payload.phase || "Coherence",
+    phaseMode: payload.phaseMode || payload.phaseModeText || "Bull",
+
+    // Optional notes
+    sequenceNote: payload.sequenceNote || "",
+    biasNote: payload.biasNote || ""
+  };
+
+  lastState = state;
+  pushHistory(state);
+
+  res.json({ ok: true, received: true });
+});
+
+// ========== STATE: latest ==========
+app.get("/state/latest", (req, res) => {
+  if (!lastState) {
+    // If nothing yet, send a neutral default
+    const now = Date.now();
+    const defaultState = {
+      timestamp: now,
+      mpdDirection: "FLAT",
+      mpdSequence: "Idle",
+      mpdBias: "Neutral",
+      mpdScore: 0.5,
+      flowMode: "SSBlue",
+      voidShield: false,
+      bias4h: "Neutral",
+      bias1h: "Neutral",
+      bias30m: "Neutral",
+      bias15m: "Neutral",
+      stackScore: 0.5,
+      phaseTag: "Coherence",
+      phaseMode: "Bull",
+      sequenceNote: "Waiting for first webhook.",
+      biasNote: "Neutral stack."
+    };
+    return res.json(defaultState);
+  }
+  res.json(lastState);
+});
+
+// ========== STATE: history ==========
+app.get("/state/history", (req, res) => {
+  res.json(history);
+});
+
+// Health check
+app.get("/", (req, res) => {
+  res.send("MBZ backend is live.");
+});
+
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => {
+  console.log("MBZ backend listening on port " + PORT);
+});
